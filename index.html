@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Күліс — 1×1</title>
+  <style>
+    body { background:#0a7c2f; color:#fff; font-family:system-ui, Arial, sans-serif; margin:0; }
+    header { text-align:center; padding:18px 12px; background:#085e24; }
+    main { max-width:900px; margin:0 auto; padding:16px; }
+    .controls { text-align:center; margin:10px 0 18px; }
+    button { background:#ffd84a; border:none; padding:10px 16px; border-radius:8px; font-weight:700; cursor:pointer; }
+    #table { background:#0c6c29; border:2px solid #fff; border-radius:12px; padding:16px; display:none; }
+    .row { display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+    .box { flex:1 1 280px; background:#0f7a30; border:1px solid #ffffff33; border-radius:10px; padding:12px; }
+    h3 { margin:6px 0 10px; font-size:16px; }
+    .hand { display:flex; flex-wrap:wrap; gap:8px; }
+    .card {
+      display:inline-flex; align-items:center; justify-content:center;
+      width:60px; height:84px; background:#fff; color:#000; border-radius:8px;
+      box-shadow:0 2px 6px rgba(0,0,0,.25); font-weight:700; cursor:pointer; user-select:none;
+      border:2px solid transparent;
+    }
+    .card.hide { background:#173a1f; color:#173a1f; }
+    .card.disabled { pointer-events:none; opacity:.6; }
+    .info { font-size:14px; opacity:.9; }
+    #log { background:#083d1a; border-radius:8px; padding:10px; height:180px; overflow:auto; font-size:14px; }
+    .tag { display:inline-block; padding:2px 6px; border-radius:6px; background:#104b21; border:1px solid #ffffff33; margin-left:6px; font-size:12px; }
+    .pill { display:inline-block; padding:2px 6px; border-radius:999px; background:#ffd84a; color:#000; font-weight:700; margin-left:6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Күліс — дуэль 1×1</h1>
+  </header>
+  <main>
+    <div class="controls">
+      <button onclick="startGame()">Новая раздача</button>
+    </div>
+
+    <div id="table">
+      <div class="row">
+        <div class="box">
+          <h3>Козырь: <span id="trump"></span>
+            <span class="tag">левая: <span id="leftPalka"></span></span>
+            <span class="tag">правая: <span id="rightPalka"></span></span>
+          </h3>
+          <div class="info" id="status"></div>
+        </div>
+        <div class="box">
+          <h3>Стол</h3>
+          <div class="info" id="battle">Пусто</div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:10px;">
+        <div class="box">
+          <h3>Твои карты <span class="pill" id="youCount">0</span></h3>
+          <div class="hand" id="playerHand"></div>
+        </div>
+        <div class="box">
+          <h3>Карты компьютера <span class="pill" id="botCount">0</span></h3>
+          <div class="hand" id="botHand"></div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;">
+        <h3>Журнал</h3>
+        <div id="log"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // ===== Колода и константы =====
+    const RANKS = ["7","9","10","J","Q","K","A"];
+    const SUITS = ["♠","♣","♥","♦"]; // пары: ♠↔♣, ♥↔♦
+    const NON_TRUMP_ORDER = {"7":0,"9":1,"10":2,"J":3,"Q":4,"K":5,"A":6};
+    const PAIR = {"♠":"♣","♣":"♠","♥":"♦","♦":"♥"};
+
+    const CARD_VALUES = {"7":7,"9":9,"10":10,"J":10,"Q":10,"K":10,"A":11};
+
+    function makeDeck(){
+      const d=[]; for(const s of SUITS) for(const r of RANKS) d.push(r+s); return d;
+    }
+    function leftPalka(tr){ return "7"+PAIR[tr]; }
+    function rightPalka(tr){ return "7"+tr; }
+    function isLeft(c,tr){ return c===leftPalka(tr); }
+    function isRight(c,tr){ return c===rightPalka(tr); }
+    function isTrump(c,tr){ return c.slice(-1)===tr || isLeft(c,tr); }
+
+    function trumpPower(c,tr){
+      if(!isTrump(c,tr)) return -1;
+      const r=c.slice(0,-1), s=c.slice(-1);
+      if(s===tr && r==="A") return 8;           // козырный туз — старший
+      if(isRight(c,tr))      return 7;          // правая палка
+      if(isLeft(c,tr))       return 6;          // левая палка
+      const map={"K":5,"Q":4,"J":3,"10":2,"9":1,"7":0};
+      return map[r] ?? 0;
+    }
+
+    function canBeat(attack, defend, tr){
+      // Некозырь бьётся старшей той же масти ИЛИ любым козырем.
+      const aSuit = attack.slice(-1), dSuit = defend.slice(-1);
+      const aTrump = isTrump(attack,tr), dTrump = isTrump(defend,tr);
+      if(!aTrump && dTrump) return true;
+      if(aTrump && dTrump)  return trumpPower(defend,tr) > trumpPower(attack,tr);
+      if(aSuit===dSuit && !aTrump) return NON_TRUMP_ORDER[defend.slice(0,-1)] > NON_TRUMP_ORDER[attack.slice(0,-1)];
+      return false;
+    }
+
+    function kulisCardPoints(c,tr){
+      if(isLeft(c,tr) || isRight(c,tr)) return 10.5;
+      return CARD_VALUES[c.slice(0,-1)];
+    }
+
+    function detectKulis(hand,tr){
+      const ranks = hand.map(c=>c.slice(0,-1));
+      const suits = hand.map(c=>c.slice(-1));
+      const hasL = hand.includes(leftPalka(tr));
+      const hasR = hand.includes(rightPalka(tr));
+      const aces = ranks.filter(r=>r==="A").length;
+
+      // "три туза": AAA, AA+левая, A+левая+правая
+      if(aces===3) return {exists:true, tier:4, pts:33, hasR:hasR, hasL:hasL, kind:"AAA"};
+      if(aces===2 && hasL) return {exists:true, tier:4, pts:33, hasR:hasR, hasL:true, kind:"AA+L"};
+      if(aces===1 && hasL && hasR) return {exists:true, tier:4, pts:33, hasR:true, hasL:true, kind:"A+L+R"};
+
+      // "три семёрки"
+      if(ranks.every(r=>r==="7")){
+        const pts = hand.reduce((s,c)=>s+kulisCardPoints(c,tr),0);
+        return {exists:true, tier:3, pts:pts, hasR:hasR, hasL:hasL, kind:"777"};
+      }
+
+      // 3 одной масти
+      const suitCounts = {};
+      for(const s of suits) suitCounts[s]=(suitCounts[s]||0)+1;
+      const monoSuit = Object.entries(suitCounts).find(([s,cnt])=>cnt===3)?.[0];
+      if(monoSuit){
+        const pts = hand.reduce((s,c)=>s+kulisCardPoints(c,tr),0);
+        const isTrumpK = (monoSuit===tr);
+        return {exists:true, tier: isTrumpK?2:1, pts:pts, hasR:hasR, hasL:hasL, suitRef:monoSuit, kind:"3-same-suit"};
+      }
+
+      // 2 одной масти + палка
+      const pairSuit = Object.entries(suitCounts).find(([s,cnt])=>cnt===2)?.[0];
+      if(pairSuit && (hasL || hasR)){
+        const pts = hand.reduce((s,c)=>s+kulisCardPoints(c,tr),0);
+        const isTrumpK = (pairSuit===tr);
+        return {exists:true, tier: isTrumpK?2:1, pts:pts, hasR:hasR, hasL:hasL, suitRef:pairSuit, kind:"2-same+palka"};
+      }
+
+      return {exists:false, tier:0, pts:0, hasR:hasR, hasL:hasL, kind:"none"};
+    }
+
+    // compare: 1 если a>b, -1 если a<b, 0 если равны
+    function compareKulis(a,b){
+      if(a.tier!==b.tier) return a.tier>b.tier?1:-1;
+      if(a.tier===0) return 0;
+      if(a.pts!==b.pts) return a.pts>b.pts?1:-1;
+      // при равенстве очков: у кого правая палка — тот старше (если у одного правая, у другого только левая)
+      if(a.hasR!==b.hasR) return a.hasR?1:-1;
+      return 0;
+    }
+
+    // ===== Состояние раздачи =====
+    let deck, trump, L, R;
+    let player, bot;
+    let stage;      // 0: игрок ходит; 1: игрок бьёт карту бота; 2: игрок кладёт последнюю; -1: игра завершена
+    let tableCard;  // текущая карта на столе (её нужно бить)
+
+    // ===== UI =====
+    const $ = s => document.querySelector(s);
+
+    function log(msg){
+      const box = $("#log");
+      box.innerHTML += msg + "<br>";
+      box.scrollTop = box.scrollHeight;
+    }
+    function setStatus(msg){ $("#status").textContent = msg; }
+    function setBattle(msg){ $("#battle").textContent = msg || "Пусто"; }
+    function renderHands(){
+      const p = $("#playerHand"); p.innerHTML="";
+      player.forEach(c=>{
+        const el = document.createElement("div");
+        el.className = "card";
+        el.textContent = c;
+        // кликабельность зависит от стадии
+        if(stage===0 || stage===1 || stage===2){
+          el.onclick = ()=>onPlayerClick(c);
+        } else {
+          el.classList.add("disabled");
+        }
+        p.appendChild(el);
+      });
+      $("#youCount").textContent = player.length;
+
+      const b = $("#botHand"); b.innerHTML="";
+      bot.forEach(()=> {
+        const el = document.createElement("div");
+        el.className = "card hide"; el.textContent="🂠";
+        b.appendChild(el);
+      });
+      $("#botCount").textContent = bot.length;
+    }
+
+    // ===== Инициализация и кулис =====
+    function startGame(){
+      $("#table").style.display = "block";
+      $("#log").innerHTML = ""; setBattle("Пусто"); setStatus("");
+
+      deck = makeDeck();
+      shuffle(deck);
+
+      trump = SUITS[Math.floor(Math.random()*SUITS.length)];
+      L = leftPalka(trump); R = rightPalka(trump);
+
+      $("#trump").textContent = trump;
+      $("#leftPalka").textContent = L;
+      $("#rightPalka").textContent = R;
+
+      player = deck.slice(0,3);
+      bot    = deck.slice(3,6);
+
+      log("Игрок получил: " + player.join(", "));
+      log("Компьютер получил 3 карты.");
+
+      // Раскрытие кулиса по очереди хода: ход начинает игрок → он раскрывает первым
+      const kP = detectKulis(player,trump);
+      const kB = detectKulis(bot,trump);
+
+      if(kP.exists){
+        log(`👉 Игрок раскрывает кулис (${kP.kind}, очков: ${sumPoints(player,trump)})`);
+        if(kB.exists){
+          log(`🤖 Компьютер раскрывает кулис (${kB.kind}, очков: ${sumPoints(bot,trump)})`);
+          const cmp = compareKulis(kP,kB);
+          if(cmp>0){ endGame("Игрок выигрывает по кулису."); return; }
+          if(cmp<0){ endGame("Компьютер выигрывает по кулису."); return; }
+          endGame("Полное равенство кулисов — ничья."); return;
+        } else {
+          endGame("Игрок выигрывает мгновенно по кулису."); return;
+        }
+      } else {
+        if(kB.exists){
+          log(`🤖 Компьютер раскрывает кулис (${kB.kind}, очков: ${sumPoints(bot,trump)})`);
+          endGame("Компьютер выигрывает мгновенно по кулису."); return;
+        }
+      }
+
+      // Кулисов нет — дуэль на 3 карты по твоей схеме
+      stage = 0; tableCard = null;
+      setStatus("Ход игрока: выбери карту для атаки.");
+      renderHands(); renderBot();
+    }
+
+    function sumPoints(hand,tr){ return hand.reduce((s,c)=>s+kulisCardPoints(c,tr),0); }
+
+    // ===== Перемешивание =====
+    function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
+
+    // ===== Ход игрока и защита/атака бота =====
+    function onPlayerClick(card){
+      if(stage===0){
+        // Игрок начинает: кладёт карту
+        playPlayerAttack(card);
+      } else if(stage===1){
+        // Игрок должен побить карту бота
+        playPlayerDefense(card);
+      } else if(stage===2){
+        // Игрок кладёт последнюю
+        playPlayerLast(card);
+      }
+    }
+
+    function playPlayerAttack(card){
+      removeFrom(player, card);
+      tableCard = card;
+      log("Игрок ходит " + card);
+      setBattle("На столе: " + tableCard);
+      renderHands();
+      setStatus("Компьютер пытается побить и подкинуть.");
+      setTimeout(botDefendAndAttack, 600);
+    }
+
+    function botDefendAndAttack(){
+      // Бот ищет минимально достаточную карту для боя
+      const defense = chooseMinDefense(bot, tableCard, trump);
+      if(!defense){
+        endGame("Компьютер не смог побить — победа игрока!");
+        return;
+      }
+      removeFrom(bot, defense);
+      log("🤖 Компьютер бьёт " + tableCard + " картой " + defense);
+
+      // Бот сразу подкидывает свою карту (лучше слабую)
+      const attack = chooseBotAttack(bot, trump);
+      if(!attack){
+        // Не осталось карт — игрок победил (бот отбился, но вышел из карт)
+        endGame("Компьютер отбился, но у него кончились карты — победа игрока!");
+        return;
+      }
+      removeFrom(bot, attack);
+      tableCard = attack;
+      log("🤖 Компьютер подкинул " + attack);
+      setBattle("На столе: " + tableCard);
+      renderHands();
+      stage = 1;
+      setStatus("Твой ход: нужно побить карту компьютера.");
+    }
+
+    function playPlayerDefense(card){
+      if(!canBeat(tableCard, card, trump)){
+        flashError(card); log("Этой картой нельзя побить."); return;
+      }
+      removeFrom(player, card);
+      log("Игрок бьёт " + tableCard + " картой " + card);
+      tableCard = null; setBattle("Пусто");
+      renderHands();
+      // Переходим к последней атаке игрока
+      stage = 2;
+      if(player.length===0){
+        // Теоретически не должно быть (после защиты должна остаться 1 карта)
+        endGame("У игрока не осталось карт.");
+        return;
+      }
+      setStatus("Клади свою последнюю карту.");
+    }
+
+    function playPlayerLast(card){
+      // Последний ход игрока — кладёт последнюю карту
+      if(player.length>1 && !player.includes(card)){ return; } // защита от гонок
+      removeFrom(player, card);
+      tableCard = card;
+      log("Игрок кладёт последнюю карту " + card);
+      setBattle("На столе: " + tableCard);
+      renderHands();
+      setStatus("Компьютер обязан отбить последней картой.");
+      setTimeout(botFinalDefend, 600);
+    }
+
+    function botFinalDefend(){
+      const defense = chooseMinDefense(bot, tableCard, trump);
+      if(!defense){
+        endGame("Компьютер не смог побить последнюю — победа игрока!");
+        return;
+      }
+      removeFrom(bot, defense);
+      log("🤖 Компьютер бьёт последнюю " + tableCard + " картой " + defense);
+      tableCard = null; setBattle("Пусто");
+      renderHands();
+
+      // По правилам: если защитник отбился до конца — он выигрывает
+      endGame("Компьютер отбился полностью — победа компьютера.");
+    }
+
+    // ===== Вспомогательная логика бота =====
+    function chooseMinDefense(hand, atk, tr){
+      // 1) минимальная по той же масти, если возможно; иначе 2) минимальный козырь
+      // Если атака — козырь, то нужен старший козырь
+      let options = hand.filter(c=>canBeat(atk,c,tr));
+      if(options.length===0) return null;
+
+      // сортируем по «минимально достаточной»
+      options.sort((a,b)=>{
+        const aT = isTrump(a,tr), bT = isTrump(b,tr);
+        const atkT = isTrump(atk,tr);
+        if(atkT){
+          // оба должны быть козырями — минимальная trumpPower
+          return trumpPower(a,tr) - trumpPower(b,tr);
+        } else {
+          // предпочесть карту той же масти, затем козыри; внутри — минимальные
+          const aSame = a.slice(-1)===atk.slice(-1) && !isTrump(a,tr);
+          const bSame = b.slice(-1)===atk.slice(-1) && !isTrump(b,tr);
+          if(aSame!==bSame) return aSame? -1 : 1;
+          // если оба козыри — по trumpPower
+          if(aT && bT) return trumpPower(a,tr) - trumpPower(b,tr);
+          // оба той же масти — по обычному порядку
+          if(!aT && !bT) return NON_TRUMP_ORDER[a.slice(0,-1)] - NON_TRUMP_ORDER[b.slice(0,-1)];
+          return 0;
+        }
+      });
+      return options[0];
+    }
+
+    function chooseBotAttack(hand,tr){
+      if(hand.length===0) return null;
+      // Ходим самой слабой, избегая тузов и палок, если можем
+      const score = c=>{
+        const t = isTrump(c,tr);
+        const r = c.slice(0,-1);
+        let base = t ? 100 + trumpPower(c,tr) : NON_TRUMP_ORDER[r];
+        // penalize aces and palka to place them later
+        if(r==="A") base += 20;
+        if(isLeft(c,tr) || isRight(c,tr)) base += 15;
+        return base;
+      };
+      const sorted = hand.slice().sort((a,b)=>score(a)-score(b));
+      return sorted[0];
+    }
+
+    function removeFrom(arr, val){
+      const i = arr.indexOf(val); if(i>=0) arr.splice(i,1);
+    }
+
+    function renderBot(){
+      // только для красоты: скрытые карты уже рисуются
+    }
+
+    function endGame(msg){
+      stage = -1;
+      setStatus(msg);
+      log("<b>"+msg+"</b>");
+      tableCard = null; setBattle("Пусто");
+      // блокируем клики
+      Array.from(document.querySelectorAll(".card")).forEach(el=>el.classList.add("disabled"));
+    }
+
+    function flashError(card){
+      const els = Array.from(document.querySelectorAll("#playerHand .card"));
+      const el = els.find(e=>e.textContent===card);
+      if(!el) return;
+      el.style.borderColor = "#ff4a4a";
+      setTimeout(()=>{ el.style.borderColor="transparent"; }, 350);
+    }
+  </script>
+</body>
+</html>
