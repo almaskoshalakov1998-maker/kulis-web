@@ -424,3 +424,198 @@
   </script>
 </body>
 </html>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Күліс — Карточный стол</title>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background: green;
+      font-family: Arial, sans-serif;
+    }
+
+    #table {
+      width: 900px;
+      height: 600px;
+      background: #2e7d32;
+      border: 5px solid #1b5e20;
+      border-radius: 12px;
+      position: relative;
+    }
+
+    #player-hand, #opponent-hand {
+      position: absolute;
+      width: 100%;
+      text-align: center;
+    }
+
+    #player-hand {
+      bottom: 20px;
+    }
+
+    #opponent-hand {
+      top: 20px;
+    }
+
+    .card {
+      display: inline-block;
+      width: 70px;
+      height: 100px;
+      background: white;
+      border: 2px solid black;
+      border-radius: 8px;
+      margin: 5px;
+      line-height: 100px;
+      text-align: center;
+      font-size: 22px;
+      cursor: pointer;
+    }
+
+    #battlefield {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    #message {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -200%);
+      font-size: 26px;
+      font-weight: bold;
+      color: yellow;
+      text-shadow: 2px 2px 4px black;
+    }
+  </style>
+</head>
+<body>
+  <div id="table">
+    <div id="opponent-hand"></div>
+    <div id="battlefield"></div>
+    <div id="player-hand"></div>
+    <div id="message"></div>
+  </div>
+
+  <script>
+    // ------------ Настройки игры ------------
+    const suits = ["♠", "♣", "♥", "♦"];
+    const ranks = ["7", "9", "10", "J", "Q", "K", "A"];
+    let deck = [];
+
+    // Собираем колоду (28 карт)
+    for (let s of suits) {
+      for (let r of ranks) {
+        deck.push(r + s);
+      }
+    }
+
+    // Перемешивание
+    deck = deck.sort(() => Math.random() - 0.5);
+
+    // Раздача
+    let playerHand = deck.splice(0, 3);
+    let opponentHand = deck.splice(0, 3);
+
+    // Определяем козырь
+    let trump = deck[0].slice(-1); // масть первой карты оставшейся колоды
+    console.log("Козырь:", trump);
+
+    // ------------ Вспомогательные функции ------------
+
+    function getCardValue(card) {
+      const r = card.slice(0, -1);
+      const s = card.slice(-1);
+      if (r === "7") return 7;
+      if (["9"].includes(r)) return 9;
+      if (["10", "J", "Q", "K"].includes(r)) return 10;
+      if (r === "A") return 11;
+      return 0;
+    }
+
+    function checkKulis(hand) {
+      let suitsCount = {};
+      hand.forEach(c => {
+        let s = c.slice(-1);
+        suitsCount[s] = (suitsCount[s] || 0) + 1;
+      });
+
+      // Проверка: три туза (старший кулис)
+      if (hand.every(c => c[0] === "A")) return {score: 999, desc: "Три туза"};
+
+      // Кулис: все три одной масти
+      if (Object.values(suitsCount).includes(3)) {
+        return {
+          score: hand.reduce((a, c) => a + getCardValue(c), 0),
+          desc: "Кулис одной масти"
+        };
+      }
+
+      return null;
+    }
+
+    // ------------ Рендеринг ------------
+
+    function renderHands() {
+      const playerDiv = document.getElementById("player-hand");
+      playerDiv.innerHTML = "";
+      playerHand.forEach((card, i) => {
+        let div = document.createElement("div");
+        div.className = "card";
+        div.innerText = card;
+        div.onclick = () => playCard(i, "player");
+        playerDiv.appendChild(div);
+      });
+
+      const opponentDiv = document.getElementById("opponent-hand");
+      opponentDiv.innerHTML = "";
+      opponentHand.forEach((card, i) => {
+        let div = document.createElement("div");
+        div.className = "card";
+        div.innerText = "🂠"; // скрыты
+        div.onclick = () => playCard(i, "opponent"); // тестовый режим
+        opponentDiv.appendChild(div);
+      });
+    }
+
+    function showMessage(text) {
+      document.getElementById("message").innerText = text;
+    }
+
+    function playCard(index, who) {
+      let card;
+      if (who === "player") {
+        card = playerHand.splice(index, 1)[0];
+      } else {
+        card = opponentHand.splice(index, 1)[0];
+      }
+
+      const battlefield = document.getElementById("battlefield");
+      let div = document.createElement("div");
+      div.className = "card";
+      div.innerText = card;
+      battlefield.appendChild(div);
+
+      renderHands();
+
+      // Проверка на кулис
+      let kulis = who === "player" ? checkKulis([card, ...playerHand]) : checkKulis([card, ...opponentHand]);
+      if (kulis) {
+        showMessage((who === "player" ? "Игрок" : "Противник") + " открыл " + kulis.desc + "! Победа!");
+      }
+    }
+
+    renderHands();
+  </script>
+</body>
+</html>
